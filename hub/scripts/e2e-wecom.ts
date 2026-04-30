@@ -31,6 +31,9 @@
  *   E2E_CLI_API_TOKEN  Binding token to use (default: random per run)
  *   E2E_NAMESPACE      Namespace to bind into (default: "e2e")
  *   E2E_TIMEOUT_MS     Per-step interactive timeout in ms (default: 90000)
+ *   E2E_VERBOSE        Set to "1" / "true" to enable debug-level frame logs
+ *                      (every received WS frame is dumped). Useful when
+ *                      clicks aren't propagating.
  *
  * Usage:
  *   WECOM_BOT_ID=… WECOM_BOT_SECRET=… bun run hub/scripts/e2e-wecom.ts
@@ -157,11 +160,16 @@ async function main(): Promise<void> {
 
     // --- Wire up the bot with an observable logger so we can detect ready ---
 
+    const verbose = process.env.E2E_VERBOSE === '1' || process.env.E2E_VERBOSE === 'true'
+
     let ready = false
     const client = new WecomWSClient({
         botId: WECOM_BOT_ID,
         secret: WECOM_BOT_SECRET,
         logger: {
+            debug: verbose
+                ? (msg: string, ...args: unknown[]) => console.log(`[client debug] ${msg}`, ...args)
+                : undefined,
             info: (msg: string, ...args: unknown[]) => {
                 console.log(`[client] ${msg}`, ...args)
                 if (msg.includes('subscribed')) ready = true
@@ -178,7 +186,15 @@ async function main(): Promise<void> {
         publicUrl: 'https://hapi.example.com',
         store,
         syncEngine,
-        client
+        client,
+        logger: {
+            debug: verbose
+                ? (msg: string, ...args: unknown[]) => console.log(`[bot debug] ${msg}`, ...args)
+                : undefined,
+            info: (msg: string, ...args: unknown[]) => console.log(`[bot] ${msg}`, ...args),
+            warn: (msg: string, ...args: unknown[]) => console.warn(`[bot] ${msg}`, ...args),
+            error: (msg: string, ...args: unknown[]) => console.error(`[bot] ${msg}`, ...args)
+        }
     })
 
     const cleanup = () => {

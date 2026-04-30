@@ -38,6 +38,7 @@ export interface WecomWSClientOptions {
     kickedPauseMs?: number
     webSocketConstructor?: typeof WebSocket
     logger?: {
+        debug?: (msg: string, ...args: unknown[]) => void
         info: (msg: string, ...args: unknown[]) => void
         warn: (msg: string, ...args: unknown[]) => void
         error: (msg: string, ...args: unknown[]) => void
@@ -234,6 +235,10 @@ export class WecomWSClient {
             return
         }
 
+        this.logger.debug?.(
+            `[WecomWSClient] rx cmd=${frame.cmd ?? '(response)'} req_id=${frame.headers?.req_id ?? '?'} errcode=${frame.errcode ?? 'n/a'} body=${JSON.stringify(frame.body ?? {}).slice(0, 600)}`
+        )
+
         // Subscribe response (no cmd, just echoed req_id + errcode)
         if (this.state === 'subscribing' && this.subscribeReqId && frame.headers?.req_id === this.subscribeReqId) {
             if (this.subscribeTimeout) {
@@ -264,10 +269,14 @@ export class WecomWSClient {
 
         switch (frame.cmd) {
             case WsCmd.MSG_CALLBACK:
+                this.logger.debug?.(`[WecomWSClient] dispatch msg_callback to onMessage`)
                 this.onMessage?.(frame as WsFrame<TextMessageBody>)
                 return
             case WsCmd.EVENT_CALLBACK: {
                 const event = (frame as WsFrame<EventBody>).body?.event
+                this.logger.debug?.(
+                    `[WecomWSClient] event_callback eventtype=${event?.eventtype ?? '(missing)'}`
+                )
                 if (event?.eventtype === 'disconnected_event') {
                     this.logger.warn('[WecomWSClient] server kicked old connection')
                     this.kickedUntil = Date.now() + this.options.kickedPauseMs
@@ -278,7 +287,10 @@ export class WecomWSClient {
                 return
             }
             default:
-                // Unknown frame — ignore
+                // Surface unknown cmds — useful when diagnosing "clicks don't work".
+                this.logger.warn(
+                    `[WecomWSClient] unhandled frame cmd=${frame.cmd} req_id=${frame.headers?.req_id} body=${JSON.stringify(frame.body ?? {}).slice(0, 400)}`
+                )
                 return
         }
     }

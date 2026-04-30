@@ -25,6 +25,13 @@ export interface WecomBotConfig {
     syncEngine: SyncEngine
     /** Pre-constructed client; if omitted, a real WecomWSClient is instantiated. */
     client?: WecomWSClient
+    /** Optional logger; falls back to console. Supports optional debug level. */
+    logger?: {
+        debug?: (msg: string, ...args: unknown[]) => void
+        info?: (msg: string, ...args: unknown[]) => void
+        warn?: (msg: string, ...args: unknown[]) => void
+        error?: (msg: string, ...args: unknown[]) => void
+    }
 }
 
 export class WecomBot implements NotificationChannel {
@@ -33,12 +40,14 @@ export class WecomBot implements NotificationChannel {
     private readonly cliApiToken: string
     private readonly publicUrl: string
     private readonly client: WecomWSClient
+    private readonly logger: NonNullable<WecomBotConfig['logger']>
 
     constructor(config: WecomBotConfig) {
         this.store = config.store
         this.syncEngine = config.syncEngine
         this.cliApiToken = config.cliApiToken
         this.publicUrl = config.publicUrl
+        this.logger = config.logger ?? {}
         this.client = config.client ?? new WecomWSClient({
             botId: config.botId,
             secret: config.secret
@@ -162,19 +171,31 @@ export class WecomBot implements NotificationChannel {
 
     private onEvent(frame: WsFrame<EventBody>): void {
         const event = frame.body?.event
+        const eventtype = event?.eventtype ?? '(none)'
+        const eventKey = (event as { event_key?: string } | undefined)?.event_key
+        const taskId = (event as { task_id?: string } | undefined)?.task_id
+        this.logger.debug?.(
+            `[WecomBot] onEvent eventtype=${eventtype} event_key=${eventKey ?? '(none)'} task_id=${taskId ?? '(none)'}`
+        )
         if (!event) return
-        if (event.eventtype !== 'template_card_event') return
+        if (event.eventtype !== 'template_card_event') {
+            this.logger.debug?.(`[WecomBot] onEvent: ignoring non-click event type=${event.eventtype}`)
+            return
+        }
 
         const ctx: CallbackCtx = {
             syncEngine: this.syncEngine,
             store: this.store,
             sendUpdate: (payload) => {
                 // Update-card responses must reuse the callback's req_id.
+                this.logger.debug?.(
+                    `[WecomBot] sending update_template_card reply req_id=${payload.reqId} task_id=${payload.body.template_card.task_id ?? '(none)'}`
+                )
                 this.client.sendWithReqId(WsCmd.RESPONSE_UPDATE, payload.reqId, payload.body)
             }
         }
         void handleTemplateCardEvent(frame, ctx).catch((err) => {
-            console.error('[WecomBot] handleTemplateCardEvent failed:', err)
+            (this.logger.error ?? console.error)('[WecomBot] handleTemplateCardEvent failed:', err)
         })
     }
 

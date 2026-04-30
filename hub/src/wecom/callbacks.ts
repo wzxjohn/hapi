@@ -20,12 +20,17 @@ function findRequestByPrefix(session: Session, prefix: string): string | null {
     return null
 }
 
-function reply(ctx: CallbackCtx, reqId: string, title: string): void {
+function reply(ctx: CallbackCtx, reqId: string, title: string, taskId?: string): void {
+    const card = buildSystemReplyCard(title)
+    // WeCom requires the update-card's template_card.task_id to match the
+    // original card's task_id; otherwise the server silently discards the
+    // response and the original card never gets replaced in the client.
+    if (taskId) card.task_id = taskId
     ctx.sendUpdate({
         reqId,
         body: {
             response_type: 'update_template_card',
-            template_card: buildSystemReplyCard(title)
+            template_card: card
         }
     })
 }
@@ -39,6 +44,7 @@ export async function handleTemplateCardEvent(
     const callbackReqId = frame.headers?.req_id
     if (!callbackReqId) return
 
+    const taskId = event.task_id
     const userid = frame.body?.from?.userid
     const parsed = parseCallbackData(event.event_key ?? '')
     if (parsed.action !== ACTION_APPROVE && parsed.action !== ACTION_DENY) {
@@ -46,42 +52,42 @@ export async function handleTemplateCardEvent(
     }
 
     if (!userid) {
-        reply(ctx, callbackReqId, 'Not bound')
+        reply(ctx, callbackReqId, 'Not bound', taskId)
         return
     }
 
     const user = ctx.store.users.getUser('wecom', userid)
     if (!user) {
-        reply(ctx, callbackReqId, 'Not bound')
+        reply(ctx, callbackReqId, 'Not bound', taskId)
         return
     }
 
     const sessions = ctx.syncEngine.getSessionsByNamespace(user.namespace)
     const session = findSessionByPrefix(sessions, parsed.sessionPrefix)
     if (!session) {
-        reply(ctx, callbackReqId, 'Session not found')
+        reply(ctx, callbackReqId, 'Session not found', taskId)
         return
     }
     if (!session.active) {
-        reply(ctx, callbackReqId, 'Session inactive')
+        reply(ctx, callbackReqId, 'Session inactive', taskId)
         return
     }
     const requestId = findRequestByPrefix(session, parsed.extra ?? '')
     if (!requestId) {
-        reply(ctx, callbackReqId, 'Already processed')
+        reply(ctx, callbackReqId, 'Already processed', taskId)
         return
     }
 
     try {
         if (parsed.action === ACTION_APPROVE) {
             await ctx.syncEngine.approvePermission(session.id, requestId)
-            reply(ctx, callbackReqId, 'Permission approved.')
+            reply(ctx, callbackReqId, 'Permission approved.', taskId)
         } else {
             await ctx.syncEngine.denyPermission(session.id, requestId)
-            reply(ctx, callbackReqId, 'Permission denied.')
+            reply(ctx, callbackReqId, 'Permission denied.', taskId)
         }
     } catch (err) {
         console.error('[WecomBot] callback failed:', err)
-        reply(ctx, callbackReqId, 'An error occurred')
+        reply(ctx, callbackReqId, 'An error occurred', taskId)
     }
 }
