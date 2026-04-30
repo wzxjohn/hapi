@@ -158,6 +158,14 @@ async function main() {
     } else {
         console.log('[Hub] ServerChan: disabled (no SERVERCHAN_SENDKEY)')
     }
+    if (config.wecomEnabled) {
+        const source = formatSource(config.sources.wecomBotId)
+        const notificationSource = formatSource(config.sources.wecomNotification)
+        console.log(`[Hub] WeCom: enabled (${source})`)
+        console.log(`[Hub] WeCom notifications: ${config.wecomNotification ? 'enabled' : 'disabled'} (${notificationSource})`)
+    } else {
+        console.log('[Hub] WeCom: disabled (no WECOM_BOT_ID/WECOM_BOT_SECRET)')
+    }
 
     // Display tunnel status
     if (relayFlag.enabled) {
