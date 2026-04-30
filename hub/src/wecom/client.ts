@@ -155,19 +155,30 @@ export class WecomWSClient {
 
         this.state = 'connecting'
         const WS = this.options.webSocketConstructor ?? WebSocket
+        let ws: WebSocket
         try {
-            this.ws = new WS(this.options.url) as WebSocket
-            this.ws.binaryType = 'arraybuffer'
+            ws = new WS(this.options.url) as WebSocket
+            ws.binaryType = 'arraybuffer'
+            this.ws = ws
         } catch (err) {
             this.logger.error('[WecomWSClient] failed to create WebSocket:', err)
             this.scheduleReconnect()
             return
         }
 
-        this.ws.addEventListener('open', () => this.handleOpen())
-        this.ws.addEventListener('message', (ev) => this.handleMessage(ev))
-        this.ws.addEventListener('close', () => this.handleClose('socket-close'))
-        this.ws.addEventListener('error', () => this.handleClose('socket-error'))
+        const ifCurrent = (fn: () => void) => () => {
+            if (this.stopped || this.ws !== ws) return
+            fn()
+        }
+        const ifCurrentWithArg = <T>(fn: (arg: T) => void) => (arg: T) => {
+            if (this.stopped || this.ws !== ws) return
+            fn(arg)
+        }
+
+        ws.addEventListener('open', ifCurrent(() => this.handleOpen()))
+        ws.addEventListener('message', ifCurrentWithArg((ev: MessageEvent) => this.handleMessage(ev)))
+        ws.addEventListener('close', ifCurrent(() => this.handleClose('socket-close')))
+        ws.addEventListener('error', ifCurrent(() => this.handleClose('socket-error')))
     }
 
     private handleOpen(): void {
@@ -236,8 +247,8 @@ export class WecomWSClient {
                 this.logger.error(
                     `[WecomWSClient] subscribe failed errcode=${frame.errcode} errmsg=${frame.errmsg}`
                 )
-                this.state = 'fatal'
                 this.stop()
+                this.state = 'fatal' // set AFTER stop() so it's not overwritten by stop()'s reset
             }
             return
         }
@@ -304,6 +315,8 @@ export class WecomWSClient {
 
     private handleClose(reason: string): void {
         if (this.stopped) return
+        // Idempotent: close + error can both fire. Only act the first time.
+        if (this.state === 'disconnected' && !this.ws) return
         this.clearTimers()
         if (this.ws) {
             try { this.ws.close() } catch { /* ignore */ }
