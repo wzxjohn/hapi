@@ -61,3 +61,21 @@ describe('findSessionByPrefix', () => {
         expect(findSessionByPrefix([session('zzzz')], 'aaaa')).toBeUndefined()
     })
 })
+
+describe('parseCallbackData — extra with colons', () => {
+    it('preserves colons inside the extra segment', () => {
+        const data = createCallbackData('ap', 'sid12345', 'a:b:c')
+        expect(data).toBe('ap:sid12345:a:b:c')
+        expect(parseCallbackData(data)).toEqual({
+            action: 'ap',
+            sessionPrefix: 'sid12345',
+            extra: 'a:b:c'
+        })
+    })
+})
+
+describe('findSessionByPrefix — empty prefix guard', () => {
+    it('returns undefined when the prefix is empty', () => {
+        expect(findSessionByPrefix([session('abc')], '')).toBeUndefined()
+    })
+})

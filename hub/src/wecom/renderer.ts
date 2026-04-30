@@ -18,12 +18,13 @@ export function parseCallbackData(data: string): {
 } {
     const parts = data.split(':')
     return {
-        action: parts[0] || '',
-        sessionPrefix: parts[1] || '',
-        extra: parts[2]
+        action: parts[0] ?? '',
+        sessionPrefix: parts[1] ?? '',
+        extra: parts.length > 2 ? parts.slice(2).join(':') : undefined
     }
 }
 
 export function findSessionByPrefix(sessions: Session[], prefix: string): Session | undefined {
+    if (!prefix) return undefined
     return sessions.find((session) => session.id.startsWith(prefix))
 }

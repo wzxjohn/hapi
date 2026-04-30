@@ -272,7 +272,7 @@ describe('createCallbackData / parseCallbackData', () => {
         const data = createCallbackData('dn', 'sessionidabc', 'requestidxyz')
         expect(parseCallbackData(data)).toEqual({
             action: 'dn',
-            sessionPrefix: 'sessionid',
+            sessionPrefix: 'sessioni',
             extra: 'requestidxyz'
         })
     })
