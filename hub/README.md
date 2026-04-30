@@ -41,6 +41,20 @@ bound, permission requests arrive as interactive template cards with Allow / Den
 buttons; ready, task-failure, and session-completion events arrive as text-notice
 cards with a link to the session.
 
+#### E2E smoke test
+
+`hub/scripts/e2e-wecom.ts` runs the real `WecomBot` against the live endpoint
+and walks through binding, permission click, ready, task failure, and session
+completion. Use this to verify a WeCom bot is wired correctly end-to-end:
+
+```bash
+WECOM_BOT_ID=… WECOM_BOT_SECRET=… bun run --cwd hub e2e:wecom
+```
+
+The script generates a per-run binding token and prints instructions at each
+step. Interactive steps (binding, button click) time out after
+`E2E_TIMEOUT_MS` (default 90 s).
+
 ### Optional
 
 - `HAPI_LISTEN_HOST` - HTTP bind address (default: 127.0.0.1).
