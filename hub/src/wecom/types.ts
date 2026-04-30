@@ -43,6 +43,15 @@ export interface TextMessageBody {
 
 export interface TemplateCardEvent {
     eventtype: 'template_card_event'
+    // WeCom's live wire format nests the click details under a sub-object
+    // named after the eventtype. The vendor aibot-node-sdk type declarations
+    // put event_key / task_id directly on the event object — keep those as
+    // a fallback for older payloads or alternative API-mode shapes.
+    template_card_event?: {
+        card_type?: string
+        event_key?: string
+        task_id?: string
+    }
     event_key?: string
     task_id?: string
 }

@@ -37,6 +37,23 @@ function makeFrame(event_key: string, userid = 'u-1'): WsFrame<EventBody> {
             aibotid: 'bot',
             from: { userid },
             msgtype: 'event',
+            event: {
+                eventtype: 'template_card_event',
+                template_card_event: { event_key, task_id: 't' }
+            }
+        }
+    }
+}
+
+function makeFlatFrame(event_key: string, userid = 'u-1'): WsFrame<EventBody> {
+    return {
+        cmd: 'aibot_event_callback',
+        headers: { req_id: 'callback-req-1' },
+        body: {
+            msgid: 'm1',
+            aibotid: 'bot',
+            from: { userid },
+            msgtype: 'event',
             event: { eventtype: 'template_card_event', event_key, task_id: 't' }
         }
     }
@@ -138,5 +155,18 @@ describe('handleTemplateCardEvent', () => {
         await handleTemplateCardEvent(makeFrame('ap:abcdef01'), ctx)
         const [arg] = ctx.sendUpdate.mock.calls[0] as [{ body: { template_card: { main_title?: { title?: string } } } }]
         expect(arg.body.template_card.main_title?.title).toBe('Already processed')
+    })
+
+    it('accepts legacy flat event payloads (event_key/task_id on event root)', async () => {
+        const approve = mock(async () => {})
+        const ctx = makeCtx({ session: makeSession(), userNamespace: 'default', approve })
+        const frame = makeFlatFrame('ap:abcdef01:req98765')
+
+        await handleTemplateCardEvent(frame, ctx)
+
+        expect(approve).toHaveBeenCalledWith('abcdef0123456789', 'req98765432abc')
+        const [arg] = ctx.sendUpdate.mock.calls[0] as [{ body: { template_card: { task_id?: string; main_title?: { title?: string } } } }]
+        expect(arg.body.template_card.task_id).toBe('t')
+        expect(arg.body.template_card.main_title?.title).toBe('Permission approved.')
     })
 })

@@ -257,7 +257,10 @@ describe('WecomBot onEvent (template card click)', () => {
                 msgid: 'm', aibotid: 'b',
                 from: { userid: 'wecom-user-1' },
                 msgtype: 'event',
-                event: { eventtype: 'template_card_event', event_key: 'ap:abcdef01:req98765', task_id: 't' }
+                event: {
+                    eventtype: 'template_card_event',
+                    template_card_event: { event_key: 'ap:abcdef01:req98765', task_id: 't' }
+                }
             }
         })
         await new Promise((r) => setTimeout(r, 0))
@@ -278,7 +281,10 @@ describe('WecomBot onEvent (template card click)', () => {
                 msgid: 'm', aibotid: 'b',
                 from: { userid: 'wecom-user-1' },
                 msgtype: 'event',
-                event: { eventtype: 'template_card_event', event_key: 'dn:abcdef01:req98765', task_id: 't' }
+                event: {
+                    eventtype: 'template_card_event',
+                    template_card_event: { event_key: 'dn:abcdef01:req98765', task_id: 't' }
+                }
             }
         })
         await new Promise((r) => setTimeout(r, 0))

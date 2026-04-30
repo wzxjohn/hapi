@@ -44,9 +44,14 @@ export async function handleTemplateCardEvent(
     const callbackReqId = frame.headers?.req_id
     if (!callbackReqId) return
 
-    const taskId = event.task_id
+    // WeCom's live wire format nests click details under `event.template_card_event`.
+    // Fall back to flat fields on the event itself for older payloads.
+    const details = event.template_card_event ?? {}
+    const rawKey = details.event_key ?? event.event_key ?? ''
+    const taskId = details.task_id ?? event.task_id
+
     const userid = frame.body?.from?.userid
-    const parsed = parseCallbackData(event.event_key ?? '')
+    const parsed = parseCallbackData(rawKey)
     if (parsed.action !== ACTION_APPROVE && parsed.action !== ACTION_DENY) {
         return
     }

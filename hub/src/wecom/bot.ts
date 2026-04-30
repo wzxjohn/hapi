@@ -172,8 +172,17 @@ export class WecomBot implements NotificationChannel {
     private onEvent(frame: WsFrame<EventBody>): void {
         const event = frame.body?.event
         const eventtype = event?.eventtype ?? '(none)'
-        const eventKey = (event as { event_key?: string } | undefined)?.event_key
-        const taskId = (event as { task_id?: string } | undefined)?.task_id
+        // See note in callbacks.ts: click details live under event.template_card_event.*
+        // on the live wire, with flat fallback for older payloads.
+        const details =
+            (event as { template_card_event?: { event_key?: string; task_id?: string } } | undefined)
+                ?.template_card_event ?? {}
+        const eventKey =
+            details.event_key ??
+            (event as { event_key?: string } | undefined)?.event_key
+        const taskId =
+            details.task_id ??
+            (event as { task_id?: string } | undefined)?.task_id
         this.logger.debug?.(
             `[WecomBot] onEvent eventtype=${eventtype} event_key=${eventKey ?? '(none)'} task_id=${taskId ?? '(none)'}`
         )
