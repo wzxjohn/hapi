@@ -157,6 +157,7 @@ export class WecomWSClient {
         const WS = this.options.webSocketConstructor ?? WebSocket
         try {
             this.ws = new WS(this.options.url) as WebSocket
+            this.ws.binaryType = 'arraybuffer'
         } catch (err) {
             this.logger.error('[WecomWSClient] failed to create WebSocket:', err)
             this.scheduleReconnect()
@@ -202,9 +203,21 @@ export class WecomWSClient {
     }
 
     private handleMessage(ev: MessageEvent): void {
+        if (this.stopped) return
         let frame: WsFrame
         try {
-            frame = JSON.parse(typeof ev.data === 'string' ? ev.data : ev.data.toString())
+            const raw = ev.data
+            let text: string
+            if (typeof raw === 'string') {
+                text = raw
+            } else if (raw instanceof ArrayBuffer) {
+                text = new TextDecoder().decode(raw)
+            } else {
+                // Blob or other — WeCom only sends text; log and bail.
+                this.logger.warn('[WecomWSClient] ignoring non-text frame')
+                return
+            }
+            frame = JSON.parse(text)
         } catch (err) {
             this.logger.warn('[WecomWSClient] failed to parse frame:', err)
             return
