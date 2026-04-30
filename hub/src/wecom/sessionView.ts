@@ -1,5 +1,6 @@
 import type { Session } from '../sync/syncEngine'
 import type { TaskNotification } from '../notifications/notificationTypes'
+import { isFailureStatus } from '../notifications/notificationTypes'
 import { getAgentName, getSessionName } from '../notifications/sessionInfo'
 import { ACTION_APPROVE, ACTION_DENY, createCallbackData } from './renderer'
 import type { TemplateCard } from './types'
@@ -87,8 +88,7 @@ export function buildTaskCard(
 ): TemplateCard {
     const agent = getAgentName(session)
     const name = getSessionName(session)
-    const status = notification.status?.trim().toLowerCase()
-    const failed = status === 'failed' || status === 'error' || status === 'killed' || status === 'aborted'
+    const failed = isFailureStatus(notification.status)
     return {
         card_type: 'text_notice',
         main_title: {

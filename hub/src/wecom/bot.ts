@@ -5,6 +5,7 @@ import type {
     NotificationChannel,
     TaskNotification
 } from '../notifications/notificationTypes'
+import { isFailureStatus } from '../notifications/notificationTypes'
 import { WsCmd, type EventBody, type SendMsgBody, type TextMessageBody, type WsFrame } from './types'
 import { WecomWSClient } from './client'
 import { handleTemplateCardEvent, type CallbackCtx } from './callbacks'
@@ -85,10 +86,7 @@ export class WecomBot implements NotificationChannel {
 
     async sendTaskNotification(session: Session, notification: TaskNotification): Promise<void> {
         if (!session.active) return
-        const status = notification.status?.trim().toLowerCase()
-        const failed = status === 'failed' || status === 'error' || status === 'killed' || status === 'aborted'
-        // Mirror ServerChan: only send for failures to avoid notification noise.
-        if (!failed) return
+        if (!isFailureStatus(notification.status)) return
         const card = buildTaskCard(session, notification, this.publicUrl)
         for (const chatid of this.bindingsFor(session.namespace)) {
             this.client.send(WsCmd.SEND_MSG, {
