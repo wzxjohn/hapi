@@ -120,16 +120,43 @@ export class WecomBot implements NotificationChannel {
         const namespace = content.slice(prefix.length).trim()
         if (!namespace) return
 
+        // Whitelist: letters, digits, dash, underscore, up to 64 chars.
+        // Rejects markdown metacharacters that would break the confirmation
+        // card and keeps the `users.namespace` column to a known charset.
+        if (!/^[A-Za-z0-9_-]{1,64}$/.test(namespace)) {
+            this.sendBindReply(userid,
+                'Invalid namespace. Allowed: letters, digits, `-`, `_`, max 64 chars.')
+            return
+        }
+
+        const existing = this.store.users.getUser('wecom', userid)
+        if (existing) {
+            if (existing.namespace === namespace) {
+                this.sendBindReply(userid,
+                    `Already bound to namespace **${namespace}**.`)
+            } else {
+                // Refuse to silently no-op: surface the conflict.
+                this.sendBindReply(userid,
+                    `Already bound to a different namespace. Unbind first before rebinding.`)
+            }
+            return
+        }
+
         try {
             this.store.users.addUser('wecom', userid, namespace)
         } catch (err) {
             console.error('[WecomBot] failed to persist binding:', err)
             return
         }
+        this.sendBindReply(userid,
+            `Bound WeCom user **${userid}** to namespace **${namespace}**.`)
+    }
+
+    private sendBindReply(chatid: string, content: string): void {
         this.client.send(WsCmd.SEND_MSG, {
-            chatid: userid,
+            chatid,
             msgtype: 'markdown',
-            markdown: { content: `Bound WeCom user **${userid}** to namespace **${namespace}**` }
+            markdown: { content }
         })
     }
 

@@ -170,6 +170,7 @@ describe('WecomBot binding', () => {
         const body = client.sent[0].body as Extract<SendMsgBody, { msgtype: 'markdown' }>
         expect(body.msgtype).toBe('markdown')
         expect(body.markdown.content).toContain('myns')
+        expect(body.markdown.content).toMatch(/namespace \*\*myns\*\*\.$/)
     })
 
     it('ignores non-matching text content', () => {
@@ -186,6 +187,62 @@ describe('WecomBot binding', () => {
         })
         expect(addUser).not.toHaveBeenCalled()
         expect(client.sent).toHaveLength(0)
+    })
+
+    it('rejects invalid namespace characters with a usage reply', () => {
+        const { client, addUser } = makeBot([])
+        client.onMessage!({
+            cmd: 'aibot_msg_callback',
+            headers: { req_id: 'r1' },
+            body: {
+                msgid: 'm', aibotid: 'b', chattype: 'single',
+                from: { userid: 'u-new' },
+                msgtype: 'text',
+                text: { content: 'TOKEN:**bad ns**\n' }
+            }
+        })
+        expect(addUser).not.toHaveBeenCalled()
+        expect(client.sent).toHaveLength(1)
+        const body = client.sent[0].body as Extract<SendMsgBody, { msgtype: 'markdown' }>
+        expect(body.markdown.content).toContain('Invalid namespace')
+    })
+
+    it('refuses to silently rebind an already-bound userid to a different namespace', () => {
+        const { client, addUser } = makeBot([
+            { platformUserId: 'u-existing', namespace: 'nsA' }
+        ])
+        client.onMessage!({
+            cmd: 'aibot_msg_callback',
+            headers: { req_id: 'r1' },
+            body: {
+                msgid: 'm', aibotid: 'b', chattype: 'single',
+                from: { userid: 'u-existing' },
+                msgtype: 'text',
+                text: { content: 'TOKEN:nsB' }
+            }
+        })
+        expect(addUser).not.toHaveBeenCalled()
+        const body = client.sent[0].body as Extract<SendMsgBody, { msgtype: 'markdown' }>
+        expect(body.markdown.content).toContain('Already bound to a different namespace')
+    })
+
+    it('confirms idempotent rebind to the same namespace without writing', () => {
+        const { client, addUser } = makeBot([
+            { platformUserId: 'u-existing', namespace: 'nsA' }
+        ])
+        client.onMessage!({
+            cmd: 'aibot_msg_callback',
+            headers: { req_id: 'r1' },
+            body: {
+                msgid: 'm', aibotid: 'b', chattype: 'single',
+                from: { userid: 'u-existing' },
+                msgtype: 'text',
+                text: { content: 'TOKEN:nsA' }
+            }
+        })
+        expect(addUser).not.toHaveBeenCalled()
+        const body = client.sent[0].body as Extract<SendMsgBody, { msgtype: 'markdown' }>
+        expect(body.markdown.content).toContain('Already bound to namespace **nsA**')
     })
 })
 
