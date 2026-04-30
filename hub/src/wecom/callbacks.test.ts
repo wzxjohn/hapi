@@ -85,6 +85,7 @@ function makeCtx(opts: {
     return {
         syncEngine,
         store,
+        publicUrl: 'https://hapi.example.com',
         sendUpdate
     }
 }
@@ -168,5 +169,15 @@ describe('handleTemplateCardEvent', () => {
         const [arg] = ctx.sendUpdate.mock.calls[0] as [{ body: { template_card: { task_id?: string; main_title?: { title?: string } } } }]
         expect(arg.body.template_card.task_id).toBe('t')
         expect(arg.body.template_card.main_title?.title).toBe('Permission approved.')
+    })
+
+    it('always includes card_action on update cards to satisfy WeCom errcode 42045', async () => {
+        const ctx = makeCtx({ session: makeSession(), userNamespace: 'default' })
+        await handleTemplateCardEvent(makeFrame('ap:abcdef01:req98765'), ctx)
+        const [arg] = ctx.sendUpdate.mock.calls[0] as [{
+            body: { template_card: { card_action?: { type?: number; url?: string } } }
+        }]
+        expect(arg.body.template_card.card_action?.type).toBe(1)
+        expect(arg.body.template_card.card_action?.url).toMatch(/^https:\/\/hapi\.example\.com/)
     })
 })

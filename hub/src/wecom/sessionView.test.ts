@@ -96,10 +96,12 @@ describe('buildSessionCompletionCard', () => {
 })
 
 describe('buildSystemReplyCard', () => {
-    it('builds a simple notice card with the given title', () => {
-        const card = buildSystemReplyCard('Permission approved.')
+    it('builds a notice card with the given title and a card_action', () => {
+        const card = buildSystemReplyCard('Permission approved.', 'https://hapi.example.com/sessions/abc')
         expect(card.card_type).toBe('text_notice')
         expect(card.main_title?.title).toBe('Permission approved.')
         expect(card.button_list).toBeUndefined()
+        // WeCom rejects template cards without card_action with errcode 42045.
+        expect(card.card_action).toEqual({ type: 1, url: 'https://hapi.example.com/sessions/abc' })
     })
 })

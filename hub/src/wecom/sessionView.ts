@@ -16,6 +16,8 @@ function sessionUrl(publicUrl: string, sessionId: string): string {
     }
 }
 
+export { sessionUrl }
+
 function truncate(value: string, max: number): string {
     if (value.length <= max) return value
     return value.slice(0, max - 3) + '...'
@@ -110,9 +112,14 @@ export function buildSessionCompletionCard(session: Session, publicUrl: string):
     }
 }
 
-export function buildSystemReplyCard(title: string, desc?: string): TemplateCard {
+export function buildSystemReplyCard(title: string, url: string, desc?: string): TemplateCard {
+    // WeCom rejects template cards without a valid card_action with errcode
+    // 42045 ("Template_Card.card_action missing or invalid"), including on
+    // update_template_card replies. Always attach one pointing to publicUrl
+    // (or a session URL) so the server accepts the update.
     return {
         card_type: 'text_notice',
-        main_title: { title, desc }
+        main_title: { title, desc },
+        card_action: { type: 1, url }
     }
 }

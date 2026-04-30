@@ -287,6 +287,18 @@ export class WecomWSClient {
                 return
             }
             default:
+                // Response frames for our outgoing sends (send_msg, respond_update_msg)
+                // echo back with no cmd — surface non-zero errcodes as errors so
+                // failures like 42045 (card_action missing) don't look like benign
+                // "unhandled frame" warnings.
+                if (frame.cmd == null && typeof frame.errcode === 'number') {
+                    if (frame.errcode !== 0) {
+                        this.logger.error(
+                            `[WecomWSClient] server error response req_id=${frame.headers?.req_id} errcode=${frame.errcode} errmsg=${frame.errmsg ?? ''}`
+                        )
+                    }
+                    return
+                }
                 // Surface unknown cmds — useful when diagnosing "clicks don't work".
                 this.logger.warn(
                     `[WecomWSClient] unhandled frame cmd=${frame.cmd} req_id=${frame.headers?.req_id} body=${JSON.stringify(frame.body ?? {}).slice(0, 400)}`

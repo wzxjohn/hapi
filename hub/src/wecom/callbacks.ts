@@ -1,12 +1,13 @@
 import type { Session, SyncEngine } from '../sync/syncEngine'
 import type { Store } from '../store'
 import { ACTION_APPROVE, ACTION_DENY, parseCallbackData, findSessionByPrefix } from './renderer'
-import { buildSystemReplyCard } from './sessionView'
+import { buildSystemReplyCard, sessionUrl } from './sessionView'
 import type { EventBody, UpdateTemplateCardBody, WsFrame } from './types'
 
 export interface CallbackCtx {
     syncEngine: SyncEngine
     store: Store
+    publicUrl: string
     sendUpdate: (payload: { reqId: string; body: UpdateTemplateCardBody }) => void
 }
 
@@ -20,8 +21,15 @@ function findRequestByPrefix(session: Session, prefix: string): string | null {
     return null
 }
 
-function reply(ctx: CallbackCtx, reqId: string, title: string, taskId?: string): void {
-    const card = buildSystemReplyCard(title)
+function reply(
+    ctx: CallbackCtx,
+    reqId: string,
+    title: string,
+    taskId?: string,
+    sessionId?: string
+): void {
+    const url = sessionId ? sessionUrl(ctx.publicUrl, sessionId) : ctx.publicUrl
+    const card = buildSystemReplyCard(title, url)
     // WeCom requires the update-card's template_card.task_id to match the
     // original card's task_id; otherwise the server silently discards the
     // response and the original card never gets replaced in the client.
@@ -74,25 +82,25 @@ export async function handleTemplateCardEvent(
         return
     }
     if (!session.active) {
-        reply(ctx, callbackReqId, 'Session inactive', taskId)
+        reply(ctx, callbackReqId, 'Session inactive', taskId, session.id)
         return
     }
     const requestId = findRequestByPrefix(session, parsed.extra ?? '')
     if (!requestId) {
-        reply(ctx, callbackReqId, 'Already processed', taskId)
+        reply(ctx, callbackReqId, 'Already processed', taskId, session.id)
         return
     }
 
     try {
         if (parsed.action === ACTION_APPROVE) {
             await ctx.syncEngine.approvePermission(session.id, requestId)
-            reply(ctx, callbackReqId, 'Permission approved.', taskId)
+            reply(ctx, callbackReqId, 'Permission approved.', taskId, session.id)
         } else {
             await ctx.syncEngine.denyPermission(session.id, requestId)
-            reply(ctx, callbackReqId, 'Permission denied.', taskId)
+            reply(ctx, callbackReqId, 'Permission denied.', taskId, session.id)
         }
     } catch (err) {
         console.error('[WecomBot] callback failed:', err)
-        reply(ctx, callbackReqId, 'An error occurred', taskId)
+        reply(ctx, callbackReqId, 'An error occurred', taskId, session.id)
     }
 }

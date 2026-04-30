@@ -195,6 +195,7 @@ export class WecomBot implements NotificationChannel {
         const ctx: CallbackCtx = {
             syncEngine: this.syncEngine,
             store: this.store,
+            publicUrl: this.publicUrl,
             sendUpdate: (payload) => {
                 // Update-card responses must reuse the callback's req_id.
                 this.logger.debug?.(
