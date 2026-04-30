@@ -1,6 +1,5 @@
 import type { Session } from '../sync/syncEngine'
 import type { TaskNotification } from '../notifications/notificationTypes'
-import type { AgentStateRequest } from '@hapi/protocol/types'
 import { getAgentName, getSessionName } from '../notifications/sessionInfo'
 import { createCallbackData } from './renderer'
 import type { TemplateCard } from './types'
@@ -49,7 +48,7 @@ export function buildPermissionCard(session: Session, publicUrl: string): Templa
     if (!requests) return null
     const requestId = Object.keys(requests)[0]
     if (!requestId) return null
-    const request = requests[requestId] as AgentStateRequest
+    const request = requests[requestId]
 
     const sidPrefix = session.id.slice(0, 8)
     const reqPrefix = requestId.slice(0, 8)
