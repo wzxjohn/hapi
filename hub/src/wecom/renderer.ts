@@ -2,6 +2,9 @@ import type { Session } from '../sync/syncEngine'
 
 const SESSION_PREFIX_LEN = 8
 
+export const ACTION_APPROVE = 'ap'
+export const ACTION_DENY = 'dn'
+
 export function createCallbackData(action: string, sessionId: string, extra?: string): string {
     const sessionPrefix = sessionId.slice(0, SESSION_PREFIX_LEN)
     let data = `${action}:${sessionPrefix}`

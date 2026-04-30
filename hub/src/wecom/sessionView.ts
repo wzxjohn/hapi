@@ -1,11 +1,9 @@
 import type { Session } from '../sync/syncEngine'
 import type { TaskNotification } from '../notifications/notificationTypes'
 import { getAgentName, getSessionName } from '../notifications/sessionInfo'
-import { createCallbackData } from './renderer'
+import { ACTION_APPROVE, ACTION_DENY, createCallbackData } from './renderer'
 import type { TemplateCard } from './types'
 
-const ACTION_APPROVE = 'ap'
-const ACTION_DENY = 'dn'
 const MAX_ARGS_LEN = 200
 
 function sessionUrl(publicUrl: string, sessionId: string): string {

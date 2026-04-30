@@ -68,8 +68,7 @@ function makeCtx(opts: {
     return {
         syncEngine,
         store,
-        sendUpdate,
-        publicUrl: 'https://hapi.example.com'
+        sendUpdate
     }
 }
 
@@ -132,5 +131,12 @@ describe('handleTemplateCardEvent', () => {
         const ctx = makeCtx({ session: makeSession(), userNamespace: 'default' })
         await handleTemplateCardEvent(makeFrame('xx:abcdef01:req98765'), ctx)
         expect(ctx.sendUpdate).not.toHaveBeenCalled()
+    })
+
+    it('replies with "Already processed" when the event_key has no request prefix', async () => {
+        const ctx = makeCtx({ session: makeSession(), userNamespace: 'default' })
+        await handleTemplateCardEvent(makeFrame('ap:abcdef01'), ctx)
+        const [arg] = ctx.sendUpdate.mock.calls[0] as [{ body: { template_card: { main_title?: { title?: string } } } }]
+        expect(arg.body.template_card.main_title?.title).toBe('Already processed')
     })
 })
