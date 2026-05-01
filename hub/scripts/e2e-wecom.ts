@@ -5,9 +5,10 @@
  * Connects to the real WeCom long-connection endpoint
  * (`wss://openws.work.weixin.qq.com`) and walks through every notification
  * type plus the interactive binding + approve/deny flow. Nothing is mocked:
- * the real `WecomBot` and `WecomWSClient` run against the real service; only
- * `Store` and `SyncEngine` are in-memory stand-ins so the harness can boot
- * without the rest of the hub.
+ * the real `WecomBot` wrapper and the official `@wecom/aibot-node-sdk`
+ * `WSClient` run against the real service; only `Store` and `SyncEngine`
+ * are in-memory stand-ins so the harness can boot without the rest of the
+ * hub.
  *
  * What it verifies:
  *   1. Subscribe succeeds against the real endpoint.
@@ -51,7 +52,7 @@ import type { Session, SyncEngine } from '../src/sync/syncEngine'
 import type { Store } from '../src/store'
 import type { StoredUser } from '../src/store/types'
 import { WecomBot } from '../src/wecom/bot'
-import { WecomWSClient } from '../src/wecom/client'
+import { WSClient } from '@wecom/aibot-node-sdk'
 
 const WECOM_BOT_ID = requireEnv('WECOM_BOT_ID')
 const WECOM_BOT_SECRET = requireEnv('WECOM_BOT_SECRET')
@@ -163,21 +164,19 @@ async function main(): Promise<void> {
     const verbose = process.env.E2E_VERBOSE === '1' || process.env.E2E_VERBOSE === 'true'
 
     let ready = false
-    const client = new WecomWSClient({
+    const client = new WSClient({
         botId: WECOM_BOT_ID,
         secret: WECOM_BOT_SECRET,
         logger: {
-            debug: verbose
-                ? (msg: string, ...args: unknown[]) => console.log(`[client debug] ${msg}`, ...args)
-                : undefined,
-            info: (msg: string, ...args: unknown[]) => {
-                console.log(`[client] ${msg}`, ...args)
-                if (msg.includes('subscribed')) ready = true
+            debug: (msg: string, ...args: unknown[]) => {
+                if (verbose) console.log(`[client debug] ${msg}`, ...args)
             },
+            info: (msg: string, ...args: unknown[]) => console.log(`[client] ${msg}`, ...args),
             warn: (msg: string, ...args: unknown[]) => console.warn(`[client] ${msg}`, ...args),
             error: (msg: string, ...args: unknown[]) => console.error(`[client] ${msg}`, ...args)
         }
     })
+    client.once('authenticated', () => { ready = true })
 
     const bot = new WecomBot({
         botId: WECOM_BOT_ID,

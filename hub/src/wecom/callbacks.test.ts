@@ -1,7 +1,7 @@
 import { describe, expect, it, mock } from 'bun:test'
 import type { Session, SyncEngine } from '../sync/syncEngine'
 import type { Store } from '../store'
-import type { WsFrame, EventBody } from './types'
+import type { EventMessageWith, TemplateCard, TemplateCardEventData, WsFrame } from './types'
 import { handleTemplateCardEvent } from './callbacks'
 
 function makeSession(overrides: Partial<Session> = {}): Session {
@@ -28,7 +28,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     } as Session
 }
 
-function makeFrame(event_key: string, userid = 'u-1'): WsFrame<EventBody> {
+function makeFrame(event_key: string, userid = 'u-1'): WsFrame<EventMessageWith<TemplateCardEventData>> {
     return {
         cmd: 'aibot_event_callback',
         headers: { req_id: 'callback-req-1' },
@@ -42,10 +42,10 @@ function makeFrame(event_key: string, userid = 'u-1'): WsFrame<EventBody> {
                 template_card_event: { event_key, task_id: 't' }
             }
         }
-    }
+    } as unknown as WsFrame<EventMessageWith<TemplateCardEventData>>
 }
 
-function makeFlatFrame(event_key: string, userid = 'u-1'): WsFrame<EventBody> {
+function makeFlatFrame(event_key: string, userid = 'u-1'): WsFrame<EventMessageWith<TemplateCardEventData>> {
     return {
         cmd: 'aibot_event_callback',
         headers: { req_id: 'callback-req-1' },
@@ -56,7 +56,7 @@ function makeFlatFrame(event_key: string, userid = 'u-1'): WsFrame<EventBody> {
             msgtype: 'event',
             event: { eventtype: 'template_card_event', event_key, task_id: 't' }
         }
-    }
+    } as unknown as WsFrame<EventMessageWith<TemplateCardEventData>>
 }
 
 function makeCtx(opts: {
@@ -65,7 +65,11 @@ function makeCtx(opts: {
     approve?: () => Promise<void>
     deny?: () => Promise<void>
 } = {}) {
-    const sendUpdate = mock((_body: unknown) => {})
+    const sendUpdate = mock((_payload: {
+        frame: WsFrame<EventMessageWith<TemplateCardEventData>>
+        card: TemplateCard
+        userids?: string[]
+    }) => {})
     const approve = opts.approve ?? (async () => {})
     const deny = opts.deny ?? (async () => {})
 
@@ -91,7 +95,7 @@ function makeCtx(opts: {
 }
 
 describe('handleTemplateCardEvent', () => {
-    it('approves and sends an "approved" update card for the callback req_id', async () => {
+    it('approves and sends an "approved" update card threading the callback frame', async () => {
         const approve = mock(async () => {})
         const ctx = makeCtx({ session: makeSession(), userNamespace: 'default', approve })
         const frame = makeFrame('ap:abcdef01:req98765')
@@ -100,10 +104,12 @@ describe('handleTemplateCardEvent', () => {
 
         expect(approve).toHaveBeenCalledWith('abcdef0123456789', 'req98765432abc')
         expect(ctx.sendUpdate).toHaveBeenCalledTimes(1)
-        const [arg] = ctx.sendUpdate.mock.calls[0] as [{ reqId: string; body: { response_type: string; template_card: { main_title?: { title?: string } } } }]
-        expect(arg.reqId).toBe('callback-req-1')
-        expect(arg.body.response_type).toBe('update_template_card')
-        expect(arg.body.template_card.main_title?.title).toBe('Permission approved.')
+        const [arg] = ctx.sendUpdate.mock.calls[0]
+        // The ORIGINAL callback frame is threaded through so the SDK can reuse
+        // its req_id when posting the update card (within the 5s window).
+        expect(arg.frame).toBe(frame)
+        expect(arg.frame.headers.req_id).toBe('callback-req-1')
+        expect(arg.card.main_title?.title).toBe('Permission approved.')
     })
 
     it('denies and sends a "denied" update card', async () => {
@@ -114,15 +120,15 @@ describe('handleTemplateCardEvent', () => {
         await handleTemplateCardEvent(frame, ctx)
 
         expect(deny).toHaveBeenCalledWith('abcdef0123456789', 'req98765432abc')
-        const [arg] = ctx.sendUpdate.mock.calls[0] as [{ body: { template_card: { main_title?: { title?: string } } } }]
-        expect(arg.body.template_card.main_title?.title).toBe('Permission denied.')
+        const [arg] = ctx.sendUpdate.mock.calls[0]
+        expect(arg.card.main_title?.title).toBe('Permission denied.')
     })
 
     it('replies with "Not bound" when the userid has no binding', async () => {
         const ctx = makeCtx({ userNamespace: null })
         await handleTemplateCardEvent(makeFrame('ap:abcdef01:req98765'), ctx)
-        const [arg] = ctx.sendUpdate.mock.calls[0] as [{ body: { template_card: { main_title?: { title?: string } } } }]
-        expect(arg.body.template_card.main_title?.title).toBe('Not bound')
+        const [arg] = ctx.sendUpdate.mock.calls[0]
+        expect(arg.card.main_title?.title).toBe('Not bound')
     })
 
     it('replies with "Session inactive" when the session is inactive', async () => {
@@ -131,8 +137,8 @@ describe('handleTemplateCardEvent', () => {
             userNamespace: 'default'
         })
         await handleTemplateCardEvent(makeFrame('ap:abcdef01:req98765'), ctx)
-        const [arg] = ctx.sendUpdate.mock.calls[0] as [{ body: { template_card: { main_title?: { title?: string } } } }]
-        expect(arg.body.template_card.main_title?.title).toBe('Session inactive')
+        const [arg] = ctx.sendUpdate.mock.calls[0]
+        expect(arg.card.main_title?.title).toBe('Session inactive')
     })
 
     it('replies with "Already processed" when the request is gone', async () => {
@@ -141,8 +147,8 @@ describe('handleTemplateCardEvent', () => {
             userNamespace: 'default'
         })
         await handleTemplateCardEvent(makeFrame('ap:abcdef01:req98765'), ctx)
-        const [arg] = ctx.sendUpdate.mock.calls[0] as [{ body: { template_card: { main_title?: { title?: string } } } }]
-        expect(arg.body.template_card.main_title?.title).toBe('Already processed')
+        const [arg] = ctx.sendUpdate.mock.calls[0]
+        expect(arg.card.main_title?.title).toBe('Already processed')
     })
 
     it('ignores unknown actions', async () => {
@@ -154,8 +160,8 @@ describe('handleTemplateCardEvent', () => {
     it('replies with "Already processed" when the event_key has no request prefix', async () => {
         const ctx = makeCtx({ session: makeSession(), userNamespace: 'default' })
         await handleTemplateCardEvent(makeFrame('ap:abcdef01'), ctx)
-        const [arg] = ctx.sendUpdate.mock.calls[0] as [{ body: { template_card: { main_title?: { title?: string } } } }]
-        expect(arg.body.template_card.main_title?.title).toBe('Already processed')
+        const [arg] = ctx.sendUpdate.mock.calls[0]
+        expect(arg.card.main_title?.title).toBe('Already processed')
     })
 
     it('accepts legacy flat event payloads (event_key/task_id on event root)', async () => {
@@ -166,18 +172,16 @@ describe('handleTemplateCardEvent', () => {
         await handleTemplateCardEvent(frame, ctx)
 
         expect(approve).toHaveBeenCalledWith('abcdef0123456789', 'req98765432abc')
-        const [arg] = ctx.sendUpdate.mock.calls[0] as [{ body: { template_card: { task_id?: string; main_title?: { title?: string } } } }]
-        expect(arg.body.template_card.task_id).toBe('t')
-        expect(arg.body.template_card.main_title?.title).toBe('Permission approved.')
+        const [arg] = ctx.sendUpdate.mock.calls[0]
+        expect(arg.card.task_id).toBe('t')
+        expect(arg.card.main_title?.title).toBe('Permission approved.')
     })
 
     it('always includes card_action on update cards to satisfy WeCom errcode 42045', async () => {
         const ctx = makeCtx({ session: makeSession(), userNamespace: 'default' })
         await handleTemplateCardEvent(makeFrame('ap:abcdef01:req98765'), ctx)
-        const [arg] = ctx.sendUpdate.mock.calls[0] as [{
-            body: { template_card: { card_action?: { type?: number; url?: string } } }
-        }]
-        expect(arg.body.template_card.card_action?.type).toBe(1)
-        expect(arg.body.template_card.card_action?.url).toMatch(/^https:\/\/hapi\.example\.com/)
+        const [arg] = ctx.sendUpdate.mock.calls[0]
+        expect(arg.card.card_action?.type).toBe(1)
+        expect(arg.card.card_action?.url).toMatch(/^https:\/\/hapi\.example\.com/)
     })
 })

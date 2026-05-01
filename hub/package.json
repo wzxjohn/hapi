@@ -18,6 +18,7 @@
     "dependencies": {
         "@hapi/protocol": "workspace:*",
         "@socket.io/bun-engine": "^0.1.0",
+        "@wecom/aibot-node-sdk": "^1.0.6",
         "grammy": "^1.38.4",
         "hono": "^4.11.2",
         "jose": "^6.1.3",

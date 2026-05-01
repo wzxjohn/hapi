@@ -55,71 +55,72 @@ New module `hub/src/wecom/` laid out to mirror `hub/src/telegram/`:
 
 ```
 hub/src/wecom/
-  client.ts       WecomWSClient — WS state machine, subscribe, heartbeat, reconnect, req_id correlation
-  bot.ts          WecomBot — NotificationChannel impl, push + incoming routing
-  callbacks.ts    handleCallback(frame, ctx) — template_card_event → approve/deny → update card
-  renderer.ts    callback-key codec (action:sessionPrefix:requestPrefix), session-id prefix search
-  sessionView.ts  buildPermissionCard / buildReadyCard / buildTaskCard / buildSessionCompletionCard
+  bot.ts          WecomBot — NotificationChannel impl, wraps @wecom/aibot-node-sdk WSClient
+  callbacks.ts    handleTemplateCardEvent(frame, ctx) — approve/deny → update card
+  renderer.ts     callback-key codec (action:sessionPrefix:requestPrefix), session-id prefix search
+  sessionView.ts  buildPermissionCard / buildReadyCard / buildTaskCard / buildSessionCompletionCard / buildSystemReplyCard
+  types.ts        thin re-exports from @wecom/aibot-node-sdk
   bot.test.ts
   callbacks.test.ts
   renderer.test.ts
+  sessionView.test.ts
 ```
 
 Wiring in `hub/src/index.ts`: if `config.wecomBotId` and `config.wecomBotSecret` are set
 and `config.wecomNotification` is true, instantiate `WecomBot`, start it, and push it
 onto `notificationChannels`. Shutdown adds `wecomBot?.stop()` to the existing handler.
 
-No new npm dependencies. Bun's native `WebSocket` covers the client side.
+Depends on `@wecom/aibot-node-sdk` for the WebSocket transport. The SDK owns the
+state machine, authentication, heartbeat, exponential-backoff reconnect, the
+per-`req_id` reply queue, and the 5 s `update_template_card` reply window; we
+own binding, routing, card content, and the post-kick reconnect cooldown.
 
 ## Protocol (what we implement)
 
 ### Connection
 
-- URL: `wss://openws.work.weixin.qq.com`
+Handled by `@wecom/aibot-node-sdk`'s `WSClient`:
+
+- URL: `wss://openws.work.weixin.qq.com`.
 - First frame after open: `{ cmd: "aibot_subscribe", headers: { req_id }, body: { bot_id, secret } }`.
-- Subscribe success: `{ headers: { req_id }, errcode: 0, errmsg: "ok" }`.
-- Heartbeat: send `{ cmd: "ping", headers: { req_id: "hb-<n>" } }` every 30 s; expect
-  a `{ headers: { req_id }, errcode: 0 }` response.
-
-### Connection state machine
-
-```
-disconnected → connecting → subscribing → ready
-                                           │
-             ┌───── subscribe error ───────┘
-             ▼
-         fatal (auth) — log and stop (no auto-retry on bad credentials)
-
-             ┌───── socket close / missed pong / subscribe timeout ──┐
-             ▼                                                        │
-        backoff (1 s, 2 s, 4 s … cap 30 s, infinite) ──→ connecting ──┘
-```
-
-If we receive an event with `event.eventtype === "disconnected_event"` (the server is
-kicking us because a new connection took over), we close and pause reconnect for 30 s
-to avoid a thrash loop. Subsequent reconnects resume with the normal backoff.
+- Heartbeat: `{ cmd: "ping", headers: { req_id } }` every 30 s, with pong-timeout detection.
+- Exponential-backoff reconnect: 1 s → 2 s → 4 s → … capped at 30 s.
+- Separate auth-failure retry counter so bad credentials don't thrash the network.
+- After a server-initiated kick (`disconnected_event`), the SDK marks the client as
+  "manually closed" and does **not** auto-reconnect; `WecomBot` re-arms `client.connect()`
+  after a 30 s cooldown to preserve the original behaviour while keeping the SDK
+  unchanged.
 
 ### Outbound frames
 
-- `aibot_send_msg` — used for all active pushes (permission request, ready, task).
-  Body shape: `{ chatid: <userid>, msgtype: "template_card", template_card: {...} }`.
-- `aibot_respond_update_msg` — used to update the card after a button click. Body:
-  `{ response_type: "update_template_card", template_card: {...} }`. The request
-  **must reuse the `req_id` from the incoming `aibot_event_callback` frame** and
-  must be sent within 5 s.
+- `aibot_send_msg` — used for all active pushes (permission request, ready, task,
+  bind confirmations). Sent via the SDK's `wsClient.sendMessage(chatid, body)`,
+  which returns a Promise that rejects on non-zero errcode.
+- `aibot_respond_update_msg` — used to update the card after a button click. Sent
+  via `wsClient.updateTemplateCard(frame, card, userids?)`. The SDK threads the
+  callback frame's `headers.req_id` onto the outgoing frame automatically and
+  enforces the 5 s reply window.
 
 ### Inbound frames
 
-- `aibot_msg_callback` with `body.msgtype === "text"` — treat as a potential bind
-  request: parse `body.text.content` as `<token>:<namespace>`; if `token === config.cliApiToken`
-  and namespace is non-empty, call `store.users.addUser("wecom", body.from.userid, namespace)`
-  and reply with a confirmation via `aibot_send_msg`. Otherwise ignore.
+- `aibot_msg_callback` with `body.msgtype === "text"` — SDK emits `'message.text'`;
+  `WecomBot.onTextMessage` parses `body.text.content` as `<token>:<namespace>` and,
+  if valid, calls `store.users.addUser("wecom", body.from.userid, namespace)` and
+  replies with a markdown confirmation via `wsClient.sendMessage`.
 - `aibot_event_callback` with `body.event.eventtype === "template_card_event"` —
-  route to `callbacks.handleCallback`. See below.
+  SDK emits `'event.template_card_event'`; routed to `handleTemplateCardEvent`. See
+  below.
 - `aibot_event_callback` with `body.event.eventtype === "enter_chat"` — ignored in
   this iteration.
-- `aibot_event_callback` with `body.event.eventtype === "disconnected_event"` —
-  see state machine above.
+- `aibot_event_callback` with `body.event.eventtype === "disconnected_event"` — SDK
+  forwards before closing; `WecomBot.scheduleReconnectAfterKick` re-arms a
+  `client.connect()` call after 30 s.
+
+> **Wire-format gotcha.** The SDK's TypeScript declarations put `event_key` and
+> `task_id` flat on the event object (`event.event_key`, `event.task_id`), but the
+> live wire nests them under `event.template_card_event.*`. `callbacks.ts` reads
+> from the nested path first and falls back to the flat one; removing the fallback
+> is likely safe but the cost of keeping it is trivial.
 
 ### req_id correlation
 
@@ -225,11 +226,12 @@ CORS / public URL changes are needed — outbound WS only.
 
 | Case                                      | Behavior                                                           |
 |-------------------------------------------|--------------------------------------------------------------------|
-| Missing / wrong credentials (subscribe errcode != 0) | Log prominently, stop reconnecting. Hub continues without WeCom.   |
-| Transient WS drop                          | Reconnect with exponential backoff (1 → 2 → 4 … cap 30 s).         |
-| `disconnected_event` from server           | Close, pause 30 s, then resume normal reconnect (avoids thrash).   |
-| Missed pong                                | Treat as drop; reconnect.                                          |
-| `aibot_send_msg` fires while not ready     | Queue the frame in a bounded FIFO (cap 100, drop oldest on overflow); flush on next subscribe success. Subscribe / ping are driven by the state machine and do not use this queue. |
+| Missing / wrong credentials (subscribe errcode != 0) | SDK retries up to `maxAuthFailureAttempts` (default 5), then throws `WSAuthFailureError`. Hub logs and continues without WeCom. |
+| Transient WS drop                          | SDK reconnects with exponential backoff (1 → 2 → 4 … cap 30 s).    |
+| `disconnected_event` from server           | SDK marks the client as manually closed (no auto-reconnect); `WecomBot` re-arms `client.connect()` after a 30 s cooldown. |
+| Missed pong                                | SDK treats as drop; reconnect.                                     |
+| Update-card reply rejected (errcode 42045) | Always attach `card_action` to `buildSystemReplyCard` — WeCom rejects update frames without one. |
+| `aibot_send_msg` fires while not ready     | SDK's per-`req_id` reply queue buffers it; flushes on next subscribe success. |
 | Callback from unbound userid               | Reply with update card "Not bound"; do not mutate any session.     |
 | Callback for request that no longer exists | Update card to "Already processed"; no syncEngine call.            |
 | Update exceeds the 5-second window         | Best effort — send anyway; WeCom will silently ignore a late update. |
@@ -240,13 +242,17 @@ Vitest suites next to the source, matching existing hub test conventions:
 
 - `renderer.test.ts` — `createCallbackData` / `parseCallbackData` round-trip;
   `findSessionByPrefix` / `findRequestByPrefix` helpers.
-- `callbacks.test.ts` — `handleCallback` with a stub `SyncEngine`: verifies
-  approve/deny dispatch and the shape of the outbound update frame (correct
-  `response_type`, `req_id` echoed, card type).
-- `bot.test.ts` — with a stub `WecomWSClient`: verifies push frames have the right
-  `cmd`, `chatid` list, and `template_card.button_list[].key` values for permission
-  requests; verifies the text-message bind handler validates the token and writes
-  to `store.users`; smoke tests for the ready / task / session-completion paths.
+- `callbacks.test.ts` — `handleTemplateCardEvent` with a stub `SyncEngine`: verifies
+  approve/deny dispatch, the `card_action` and `task_id` on the outbound card, the
+  nested-and-flat event-payload fallback, and that the callback frame is threaded
+  through so the SDK can reuse its `req_id`.
+- `bot.test.ts` — with an `EventEmitter`-backed fake of the SDK client surface
+  (`connect`/`disconnect`/`sendMessage`/`updateTemplateCard`/`on`): verifies push
+  frames carry the right `chatid` list and `template_card.button_list[].key` values
+  for permission requests; verifies the text-message bind handler validates the
+  token and writes to `store.users`; smoke tests for the ready / task /
+  session-completion paths; verifies `updateTemplateCard` is called with the
+  original callback frame.
 
 No live-WebSocket integration test; manual QA with a real WeCom bot covers that
 (the Telegram channel follows the same pragmatic approach).

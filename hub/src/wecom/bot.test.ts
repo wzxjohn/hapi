@@ -1,23 +1,46 @@
 import { describe, expect, it, mock } from 'bun:test'
 import type { Session, SyncEngine } from '../sync/syncEngine'
 import type { Store } from '../store'
-import type { SendMsgBody, UpdateTemplateCardBody, WsFrame, TextMessageBody } from './types'
-import { WecomBot } from './bot'
+import type { SendMsgBody, TemplateCard, WsFrame } from './types'
+import { WecomBot, type WecomBotClient } from './bot'
+
+type FakeListener = (...args: unknown[]) => void
 
 class FakeClient {
-    onMessage: ((frame: WsFrame<TextMessageBody>) => void) | null = null
-    onEvent: ((frame: unknown) => void) | null = null
-    sent: Array<{ cmd: string; body: SendMsgBody | UpdateTemplateCardBody }> = []
-    sentReqIds: Array<{ cmd: string; reqId: string; body: SendMsgBody | UpdateTemplateCardBody }> = []
+    private listeners = new Map<string, FakeListener[]>()
     started = false
     stopped = false
-    start() { this.started = true }
-    stop() { this.stopped = true }
-    send(cmd: string, body: SendMsgBody | UpdateTemplateCardBody) {
-        this.sent.push({ cmd, body })
+
+    sendMessage = mock(async (_chatid: string, _body: SendMsgBody): Promise<WsFrame> => ({
+        headers: { req_id: 'ack' },
+        errcode: 0
+    }))
+
+    updateTemplateCard = mock(
+        async (
+            _frame: { headers: { req_id: string } },
+            _card: TemplateCard,
+            _userids?: string[]
+        ): Promise<WsFrame> => ({ headers: { req_id: 'ack' }, errcode: 0 })
+    )
+
+    connect() {
+        this.started = true
     }
-    sendWithReqId(cmd: string, reqId: string, body: SendMsgBody | UpdateTemplateCardBody) {
-        this.sentReqIds.push({ cmd, reqId, body })
+
+    disconnect() {
+        this.stopped = true
+    }
+
+    on(event: string, handler: FakeListener): this {
+        const list = this.listeners.get(event) ?? []
+        list.push(handler)
+        this.listeners.set(event, list)
+        return this
+    }
+
+    emit(event: string, ...args: unknown[]) {
+        for (const l of this.listeners.get(event) ?? []) l(...args)
     }
 }
 
@@ -59,10 +82,12 @@ function makeBot(bound: Array<{ platformUserId: string; namespace: string }> = [
                 bound.filter((u) => u.namespace === ns).map((u) => ({
                     id: 1, platform: 'wecom', createdAt: 0, ...u
                 })),
-            getUser: (_p: string, uid: string) =>
-                bound.find((u) => u.platformUserId === uid)
-                    ? { id: 1, platform: 'wecom', platformUserId: uid, namespace: bound.find((u) => u.platformUserId === uid)!.namespace, createdAt: 0 }
-                    : null,
+            getUser: (_p: string, uid: string) => {
+                const hit = bound.find((u) => u.platformUserId === uid)
+                return hit
+                    ? { id: 1, platform: 'wecom', platformUserId: uid, namespace: hit.namespace, createdAt: 0 }
+                    : null
+            },
             addUser
         }
     } as unknown as Store
@@ -81,9 +106,13 @@ function makeBot(bound: Array<{ platformUserId: string; namespace: string }> = [
         publicUrl: 'https://hapi.example.com',
         store,
         syncEngine,
-        client: client as unknown as import('./client').WecomWSClient
+        client: client as unknown as WecomBotClient
     })
     return { bot, client, store, syncEngine, addUser }
+}
+
+function tick(): Promise<void> {
+    return new Promise((r) => setTimeout(r, 0))
 }
 
 describe('WecomBot.start / stop', () => {
@@ -104,29 +133,28 @@ describe('WecomBot.sendPermissionRequest', () => {
         ])
         await bot.sendPermissionRequest(session())
 
-        expect(client.sent).toHaveLength(2)
-        for (const sent of client.sent) {
-            expect(sent.cmd).toBe('aibot_send_msg')
-            const body = sent.body as Extract<SendMsgBody, { msgtype: 'template_card' }>
-            expect(body.msgtype).toBe('template_card')
-            expect(body.template_card.card_type).toBe('button_interaction')
-            expect(body.template_card.button_list?.[0].key).toBe('ap:abcdef01:req98765')
-            expect(body.template_card.button_list?.[1].key).toBe('dn:abcdef01:req98765')
+        expect(client.sendMessage.mock.calls).toHaveLength(2)
+        for (const [_chatid, body] of client.sendMessage.mock.calls) {
+            const b = body as Extract<SendMsgBody, { msgtype: 'template_card' }>
+            expect(b.msgtype).toBe('template_card')
+            expect(b.template_card.card_type).toBe('button_interaction')
+            expect(b.template_card.button_list?.[0].key).toBe('ap:abcdef01:req98765')
+            expect(b.template_card.button_list?.[1].key).toBe('dn:abcdef01:req98765')
         }
-        expect((client.sent[0].body as SendMsgBody).chatid).toBe('u1')
-        expect((client.sent[1].body as SendMsgBody).chatid).toBe('u2')
+        expect(client.sendMessage.mock.calls[0][0]).toBe('u1')
+        expect(client.sendMessage.mock.calls[1][0]).toBe('u2')
     })
 
     it('no-ops when the session has no bound WeCom users', async () => {
         const { bot, client } = makeBot([])
         await bot.sendPermissionRequest(session())
-        expect(client.sent).toHaveLength(0)
+        expect(client.sendMessage.mock.calls).toHaveLength(0)
     })
 
     it('no-ops when the session is inactive', async () => {
         const { bot, client } = makeBot()
         await bot.sendPermissionRequest(session({ active: false }))
-        expect(client.sent).toHaveLength(0)
+        expect(client.sendMessage.mock.calls).toHaveLength(0)
     })
 })
 
@@ -134,8 +162,8 @@ describe('WecomBot.sendReady', () => {
     it('sends a text_notice card to each bound user', async () => {
         const { bot, client } = makeBot()
         await bot.sendReady(session())
-        expect(client.sent).toHaveLength(1)
-        const body = client.sent[0].body as Extract<SendMsgBody, { msgtype: 'template_card' }>
+        expect(client.sendMessage.mock.calls).toHaveLength(1)
+        const body = client.sendMessage.mock.calls[0][1] as Extract<SendMsgBody, { msgtype: 'template_card' }>
         expect(body.template_card.main_title?.title).toBe('Ready for input')
     })
 })
@@ -144,151 +172,124 @@ describe('WecomBot.sendTaskNotification', () => {
     it('sends task notifications only for failure statuses', async () => {
         const { bot, client } = makeBot()
         await bot.sendTaskNotification(session(), { status: 'completed', summary: 's' })
-        expect(client.sent).toHaveLength(0)
+        expect(client.sendMessage.mock.calls).toHaveLength(0)
         await bot.sendTaskNotification(session(), { status: 'failed', summary: 's' })
-        expect(client.sent).toHaveLength(1)
-        const body = client.sent[0].body as Extract<SendMsgBody, { msgtype: 'template_card' }>
+        expect(client.sendMessage.mock.calls).toHaveLength(1)
+        const body = client.sendMessage.mock.calls[0][1] as Extract<SendMsgBody, { msgtype: 'template_card' }>
         expect(body.template_card.main_title?.title).toBe('Task failed')
     })
 })
 
+function textFrame(userid: string, content: string): WsFrame {
+    return {
+        cmd: 'aibot_msg_callback',
+        headers: { req_id: 'r1' },
+        body: {
+            msgid: 'm', aibotid: 'b', chattype: 'single',
+            from: { userid },
+            msgtype: 'text',
+            text: { content }
+        }
+    } as unknown as WsFrame
+}
+
 describe('WecomBot binding', () => {
-    it('binds a user when they send "<token>:<namespace>"', () => {
-        const { bot, client, addUser } = makeBot([])
-        client.onMessage!({
-            cmd: 'aibot_msg_callback',
-            headers: { req_id: 'r1' },
-            body: {
-                msgid: 'm', aibotid: 'b', chattype: 'single',
-                from: { userid: 'u-new' },
-                msgtype: 'text',
-                text: { content: 'TOKEN:myns' }
-            }
-        })
-        expect(addUser).toHaveBeenCalledWith('wecom', 'u-new', 'myns')
-        expect(client.sent).toHaveLength(1)
-        const body = client.sent[0].body as Extract<SendMsgBody, { msgtype: 'markdown' }>
-        expect(body.msgtype).toBe('markdown')
-        expect(body.markdown.content).toContain('myns')
-        expect(body.markdown.content).toMatch(/namespace \*\*myns\*\*\.$/)
-    })
-
-    it('ignores non-matching text content', () => {
-        const { bot, client, addUser } = makeBot([])
-        client.onMessage!({
-            cmd: 'aibot_msg_callback',
-            headers: { req_id: 'r1' },
-            body: {
-                msgid: 'm', aibotid: 'b', chattype: 'single',
-                from: { userid: 'u-new' },
-                msgtype: 'text',
-                text: { content: 'hello' }
-            }
-        })
-        expect(addUser).not.toHaveBeenCalled()
-        expect(client.sent).toHaveLength(0)
-    })
-
-    it('rejects invalid namespace characters with a usage reply', () => {
+    it('binds a user when they send "<token>:<namespace>"', async () => {
         const { client, addUser } = makeBot([])
-        client.onMessage!({
-            cmd: 'aibot_msg_callback',
-            headers: { req_id: 'r1' },
-            body: {
-                msgid: 'm', aibotid: 'b', chattype: 'single',
-                from: { userid: 'u-new' },
-                msgtype: 'text',
-                text: { content: 'TOKEN:**bad ns**\n' }
-            }
-        })
+        client.emit('message.text', textFrame('u-new', 'TOKEN:myns'))
+        await tick()
+        expect(addUser).toHaveBeenCalledWith('wecom', 'u-new', 'myns')
+        expect(client.sendMessage.mock.calls).toHaveLength(1)
+        const [chatid, body] = client.sendMessage.mock.calls[0] as [string, SendMsgBody]
+        expect(chatid).toBe('u-new')
+        const b = body as Extract<SendMsgBody, { msgtype: 'markdown' }>
+        expect(b.msgtype).toBe('markdown')
+        expect(b.markdown.content).toMatch(/namespace \*\*myns\*\*\.$/)
+    })
+
+    it('ignores non-matching text content', async () => {
+        const { client, addUser } = makeBot([])
+        client.emit('message.text', textFrame('u-new', 'hello'))
+        await tick()
         expect(addUser).not.toHaveBeenCalled()
-        expect(client.sent).toHaveLength(1)
-        const body = client.sent[0].body as Extract<SendMsgBody, { msgtype: 'markdown' }>
+        expect(client.sendMessage.mock.calls).toHaveLength(0)
+    })
+
+    it('rejects invalid namespace characters with a usage reply', async () => {
+        const { client, addUser } = makeBot([])
+        client.emit('message.text', textFrame('u-new', 'TOKEN:**bad ns**\n'))
+        await tick()
+        expect(addUser).not.toHaveBeenCalled()
+        expect(client.sendMessage.mock.calls).toHaveLength(1)
+        const body = client.sendMessage.mock.calls[0][1] as Extract<SendMsgBody, { msgtype: 'markdown' }>
         expect(body.markdown.content).toContain('Invalid namespace')
     })
 
-    it('refuses to silently rebind an already-bound userid to a different namespace', () => {
+    it('refuses to silently rebind an already-bound userid to a different namespace', async () => {
         const { client, addUser } = makeBot([
             { platformUserId: 'u-existing', namespace: 'nsA' }
         ])
-        client.onMessage!({
-            cmd: 'aibot_msg_callback',
-            headers: { req_id: 'r1' },
-            body: {
-                msgid: 'm', aibotid: 'b', chattype: 'single',
-                from: { userid: 'u-existing' },
-                msgtype: 'text',
-                text: { content: 'TOKEN:nsB' }
-            }
-        })
+        client.emit('message.text', textFrame('u-existing', 'TOKEN:nsB'))
+        await tick()
         expect(addUser).not.toHaveBeenCalled()
-        const body = client.sent[0].body as Extract<SendMsgBody, { msgtype: 'markdown' }>
+        const body = client.sendMessage.mock.calls[0][1] as Extract<SendMsgBody, { msgtype: 'markdown' }>
         expect(body.markdown.content).toContain('Already bound to a different namespace')
     })
 
-    it('confirms idempotent rebind to the same namespace without writing', () => {
+    it('confirms idempotent rebind to the same namespace without writing', async () => {
         const { client, addUser } = makeBot([
             { platformUserId: 'u-existing', namespace: 'nsA' }
         ])
-        client.onMessage!({
-            cmd: 'aibot_msg_callback',
-            headers: { req_id: 'r1' },
-            body: {
-                msgid: 'm', aibotid: 'b', chattype: 'single',
-                from: { userid: 'u-existing' },
-                msgtype: 'text',
-                text: { content: 'TOKEN:nsA' }
-            }
-        })
+        client.emit('message.text', textFrame('u-existing', 'TOKEN:nsA'))
+        await tick()
         expect(addUser).not.toHaveBeenCalled()
-        const body = client.sent[0].body as Extract<SendMsgBody, { msgtype: 'markdown' }>
+        const body = client.sendMessage.mock.calls[0][1] as Extract<SendMsgBody, { msgtype: 'markdown' }>
         expect(body.markdown.content).toContain('Already bound to namespace **nsA**')
     })
 })
 
-describe('WecomBot onEvent (template card click)', () => {
-    it('dispatches approve and replies via sendWithReqId using the callback req_id', async () => {
-        const { bot, client, syncEngine } = makeBot()
-        void bot
-        client.onEvent!({
-            cmd: 'aibot_event_callback',
-            headers: { req_id: 'cb-42' },
-            body: {
-                msgid: 'm', aibotid: 'b',
-                from: { userid: 'wecom-user-1' },
-                msgtype: 'event',
-                event: {
-                    eventtype: 'template_card_event',
-                    template_card_event: { event_key: 'ap:abcdef01:req98765', task_id: 't' }
-                }
+function clickFrame(eventKey: string, userid: string, reqId: string): WsFrame {
+    return {
+        cmd: 'aibot_event_callback',
+        headers: { req_id: reqId },
+        body: {
+            msgid: 'm', aibotid: 'b',
+            from: { userid },
+            msgtype: 'event',
+            event: {
+                eventtype: 'template_card_event',
+                template_card_event: { event_key: eventKey, task_id: 't' }
             }
-        })
-        await new Promise((r) => setTimeout(r, 0))
+        }
+    } as unknown as WsFrame
+}
+
+describe('WecomBot onEvent (template card click)', () => {
+    it('dispatches approve and passes the original frame to updateTemplateCard', async () => {
+        const { client, syncEngine } = makeBot()
+        client.emit('event.template_card_event', clickFrame('ap:abcdef01:req98765', 'wecom-user-1', 'cb-42'))
+        await tick()
 
         expect((syncEngine.approvePermission as unknown as { mock: { calls: unknown[][] } }).mock.calls).toHaveLength(1)
-        expect(client.sentReqIds).toHaveLength(1)
-        expect(client.sentReqIds[0].cmd).toBe('aibot_respond_update_msg')
-        expect(client.sentReqIds[0].reqId).toBe('cb-42')
+        expect(client.updateTemplateCard.mock.calls).toHaveLength(1)
+        const [frame, card] = client.updateTemplateCard.mock.calls[0] as [
+            WsFrame,
+            TemplateCard
+        ]
+        // The original callback frame is threaded through so the SDK reuses its req_id.
+        expect(frame.headers.req_id).toBe('cb-42')
+        expect(card.task_id).toBe('t')
+        expect(card.main_title?.title).toBe('Permission approved.')
     })
 
-    it('denies and replies with the callback req_id', async () => {
-        const { bot, client, syncEngine } = makeBot()
-        void bot
-        client.onEvent!({
-            cmd: 'aibot_event_callback',
-            headers: { req_id: 'cb-43' },
-            body: {
-                msgid: 'm', aibotid: 'b',
-                from: { userid: 'wecom-user-1' },
-                msgtype: 'event',
-                event: {
-                    eventtype: 'template_card_event',
-                    template_card_event: { event_key: 'dn:abcdef01:req98765', task_id: 't' }
-                }
-            }
-        })
-        await new Promise((r) => setTimeout(r, 0))
+    it('denies and passes the original frame (with its req_id) to updateTemplateCard', async () => {
+        const { client, syncEngine } = makeBot()
+        client.emit('event.template_card_event', clickFrame('dn:abcdef01:req98765', 'wecom-user-1', 'cb-43'))
+        await tick()
+
         expect((syncEngine.denyPermission as unknown as { mock: { calls: unknown[][] } }).mock.calls).toHaveLength(1)
-        expect(client.sentReqIds[0].reqId).toBe('cb-43')
+        const [frame, card] = client.updateTemplateCard.mock.calls[0] as [WsFrame, TemplateCard]
+        expect(frame.headers.req_id).toBe('cb-43')
+        expect(card.main_title?.title).toBe('Permission denied.')
     })
 })
